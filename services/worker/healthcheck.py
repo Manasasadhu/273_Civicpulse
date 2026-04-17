@@ -10,7 +10,7 @@ try:
     inspect = celery_app.control.inspect(timeout=5)
     stats = inspect.stats()
     if stats:
-        sys.exit(0)
+        sys.exit(0) 
     else:
         print("No Celery workers responded to ping", file=sys.stderr)
         sys.exit(1)
