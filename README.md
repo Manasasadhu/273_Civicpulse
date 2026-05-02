@@ -1,2 +1,237 @@
-# 273_Civicpulse
-273_Civicpulse
+# CivicPulse
+Urban Infrastructure Reporting at Scale — AI triage, smart deduplication, and a dispatcher-ready queue.
+
+---
+
+## Running End to End (Beginner Guide)
+
+### Prerequisites
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
+- A free Gemini API key — get one at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+
+---
+
+### Step 1 — Copy the environment file
+
+```bash
+cp .env.example .env
+```
+
+Open `.env` and fill in the two required values. Everything else can stay blank for a local run:
+
+```env
+GEMINI_API_KEY=your-key-here
+OFFICER_JWT_SECRET=any-long-random-string
+```
+
+> Generate random secrets quickly: `openssl rand -hex 32`
+
+---
+
+### Step 2 — Build and start all services
+
+```bash
+docker compose up --build
+```
+
+First build takes 2–4 minutes. You will see interleaved logs from Postgres, Redis, the API, AI Core, Worker, and the frontend. Wait until you see lines like:
+
+```
+api       | INFO:     Application startup complete.
+frontend  | Local:   http://localhost:5173/
+```
+
+> **No Twilio?** Start without the notifications service to avoid the crash:
+> ```bash
+> docker compose up --build postgres redis api ai_core worker frontend
+> ```
+
+---
+
+### Step 3 — Run database migrations
+
+Open a **second terminal** in the same directory and run:
+
+```bash
+docker compose run --rm api alembic upgrade head
+```
+
+You should see `Running upgrade ... -> 0007` lines. This creates all tables.
+
+---
+
+### Step 4 — 
+Current staff login - admin@gmail.com Pass: adminP
+
+---
+
+### Step 5 — Open the app and test the full flow
+
+| What | URL |
+|------|-----|
+| Landing page | [http://localhost:5173](http://localhost:5173) |
+| Submit a report | [http://localhost:5173/report](http://localhost:5173/report) |
+| Officer login | [http://localhost:5173/officer/login](http://localhost:5173/officer/login) |
+| Dispatcher dashboard | [http://localhost:5173/officer/dashboard](http://localhost:5173/officer/dashboard) |
+| Staff (assigned tickets) | [http://localhost:5173/staff](http://localhost:5173/staff) |
+| Track a ticket (public) | `http://localhost:5173/track/{ticket_id}` |
+| API docs (Swagger) | [http://localhost:8000/docs](http://localhost:8000/docs) |
+
+**Full flow walkthrough:**
+
+1. Go to `/report` — allow location access so the map centers on you
+2. Fill in a title, description, click the map or search an address, attach a photo (optional)
+3. Hit **Submit complaint** — you get a ticket ID immediately
+4. Log in as your officer at `/officer/login`
+5. Open the **Dispatcher Dashboard** — the ticket appears within ~30 seconds once the AI pipeline finishes
+6. Click the ticket to see the customer submission, AI classification, urgency reasoning, and factor bars
+7. The **Staff Dashboard** shows the same ticket already assigned to your account
+
+---
+
+## Required Credentials
+
+## Required Credentials
+
+**All API keys go in `.env` — never in `.env.example`.**
+`.env` is git-ignored. `.env.example` is the committed template.
+
+```bash
+cp .env.example .env
+# then open .env and fill in every REQUIRED value below
+```
+
+The internal connection strings (Postgres, Redis, API base URL) are already pre-filled in `.env.example`. Only the external keys below need your input. `LOG_LEVEL` controls verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`).
+
+### Service 1 — API Gateway
+
+| Variable | What it's used for |
+|----------|--------------------|
+| `OFFICER_JWT_SECRET` | JWT secret for officer/admin tokens (HS256). |
+| `ADMIN_USERNAME` | Bootstrap admin username (default: `admin`). |
+| `ADMIN_PASSWORD` | Bootstrap admin password (default: `adminP`). |
+| `S3_BUCKET` | AWS S3 bucket where citizen-uploaded report photos are stored. |
+| `S3_REGION` | AWS region for the bucket. Default `us-east-1`. |
+| `AWS_ACCESS_KEY_ID` | AWS IAM credential with `s3:PutObject` on the bucket. |
+| `AWS_SECRET_ACCESS_KEY` | Paired secret for the IAM key above. |
+| `R2_ENDPOINT` | Cloudflare R2 endpoint (when set, R2 is used instead of S3). |
+| `R2_BUCKET` | R2 bucket name for uploads. |
+| `R2_REGION` | R2 region (use `auto`). |
+| `R2_ACCESS_KEY_ID` | R2 access key. |
+| `R2_SECRET_ACCESS_KEY` | R2 secret key. |
+| `R2_PRESIGN_EXPIRES` | Presigned URL TTL in seconds (max 604800). |
+
+**Creating officer accounts:** Use `POST /officer/signup` from the UI, or insert directly into the `officers` table and set `department` (`roads` | `traffic` | `drainage` | `structures` | `operations`) so the auto-assignment logic routes tickets correctly.
+
+> **Skipping image uploads?** Leave the S3 or R2 variables blank — reports without images still process. The API only uploads when a photo is attached. For private R2 buckets, the stored image URL is a presigned GET that expires.
+
+### Service 2 — AI Core
+
+| Variable | What it's used for |
+|----------|--------------------|
+| `GEMINI_API_KEY` | All LLM calls: image description, classification, urgency scoring. Get one free at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey). |
+| `LANGCHAIN_TRACING_V2` | Enable LangSmith tracing (`true`/`false`). Optional. |
+| `LANGCHAIN_API_KEY` | LangSmith API key for tracing runs. Optional. |
+| `LANGCHAIN_PROJECT` | Project name shown in LangSmith. Optional. |
+| `LANGCHAIN_ENDPOINT` | LangSmith API endpoint (default `https://api.smith.langchain.com`). Optional. |
+
+> Deduplication uses a direct Postgres query (subcategory code + 100 m geo bbox) — no vector DB or embedding API required.
+
+### Service 4 — Scheduler
+
+Automatically assigns crews to approved tickets on a recurring schedule (every 15 seconds for demo purposes).
+
+| Variable | What it's used for |
+|----------|--------------------|
+| `SCHEDULER_INTERVAL` | How often to run crew assignments in seconds (default: `900` = 15 minutes). For demos, set to `15`. |
+| `LOG_LEVEL` | Controls verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`). |
+
+**How it works:**
+- Runs `scheduler.py` which continuously queries for approved tickets without crew assignments
+- Uses the same load-balancing logic as the worker: assigns to the crew with the fewest open tickets
+- Updates ticket status to `forwarded_to_maintenance` when a crew is assigned
+- Sends email notification to crew lead (if email is configured)
+
+### Service 5 — Notifications & Email
+
+**SMS via Twilio:**
+
+| Variable | What it's used for |
+|----------|--------------------|
+| `TWILIO_ACCOUNT_SID` | Twilio account identifier — found in the Twilio Console dashboard. |
+| `TWILIO_AUTH_TOKEN` | Auth token paired with the account SID. |
+| `TWILIO_FROM_NUMBER` | Your Twilio phone number SMS messages are sent from (e.g. `+12025551234`). |
+
+**Email notifications (crew lead assignment alerts):**
+
+| Variable | What it's used for |
+|----------|--------------------|
+| `EMAIL_ADDRESS` | Gmail address that sends crew lead notifications (e.g. `noreply@civicpulse.gov`). |
+| `EMAIL_APP_PASSWORD` | Gmail App Password (not your regular password). Generate at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords). Requires 2FA enabled. |
+
+When a crew is assigned to a ticket (either via scheduler or manual dispatcher action), the crew lead receives an email with:
+- Assigned issue type and priority
+- Location address
+- Link to the staff dashboard schedule
+
+> **Skipping SMS?** Leave all three Twilio variables blank — every other service still runs. S5 Notifications will crash on startup without them, but that doesn't affect other services.
+> 
+> **Skipping email?** Leave `EMAIL_ADDRESS` and `EMAIL_APP_PASSWORD` blank — crew assignment still works, but leads won't get email notifications.
+
+---
+
+## Known Gaps
+
+### S5 Notifications crashes without Twilio credentials
+Start everything except notifications if you haven't set up Twilio yet:
+```bash
+docker compose up postgres redis api ai_core worker frontend
+```
+
+---
+
+## Testing & Seed Data
+
+### Seed the database
+
+Populates Postgres with realistic demo data (5 citizens, 6 officers, 5 crews, 24 reports, 21 tickets, 6 comments, 2 schedules). Idempotent — re-running never duplicates rows. Pass `--reset` to truncate first.
+
+```bash
+# Populate (skips existing rows)
+docker compose run --rm \
+    --volume "$(pwd)/scripts:/app/scripts" \
+    api python /app/scripts/seed.py
+
+# Truncate seeded tables first, then populate
+docker compose run --rm \
+    --volume "$(pwd)/scripts:/app/scripts" \
+    api python /app/scripts/seed.py --reset
+```
+
+### Seeded login credentials
+
+| Role | Email / username | Password |
+|------|------------------|----------|
+| Admin (bootstrap) | `admin` | value of `ADMIN_PASSWORD` in `.env` |
+| Admin (officer route) | `admin@civicpulse.gov` | `Officer123!` |
+| Officer (roads) | `roads.lead@civicpulse.gov` | `Officer123!` |
+| Officer (traffic) | `traffic.lead@civicpulse.gov` | `Officer123!` |
+| Officer (drainage) | `drainage.lead@civicpulse.gov` | `Officer123!` |
+| Officer (structures) | `structures.lead@civicpulse.gov` | `Officer123!` |
+| Officer (operations) | `ops.lead@civicpulse.gov` | `Officer123!` |
+| Citizens (5) | `alice@example.com` ... `esha@example.com` | `Citizen123!` |
+
+### Test plan
+
+`TEST_PLAN.md` contains a 68-case test matrix with success and failure scenarios for every backend service (S1 API, S2 AI Core, S3 Worker, S5 Notifications, Scheduler) plus end-to-end integration tests. Each case includes preconditions, executable steps, expected results, and pass criteria.
+
+### Running automated tests
+
+```bash
+pip install -r tests/requirements-dev.txt
+pytest tests/ -v
+```
+
+The existing AI Core unit tests (classify + image description) run fully offline with mocked Gemini responses. See `tests/ai_core/` for details.
+
+---
