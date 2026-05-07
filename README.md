@@ -3,6 +3,15 @@ Urban Infrastructure Reporting at Scale — AI triage, smart deduplication, and 
 
 ---
 
+## Live Demo & Deployment
+
+| | Link |
+|---|------|
+| **Deployed App** | [https://273-civicpulse-team18.vercel.app/](https://273-civicpulse-team18.vercel.app/) |
+| **Demo Video** | [https://drive.google.com/file/d/1VNhd3yz1HXk6QwpN3BMUzI2MAwU-hQMy/view?usp=sharing] |
+
+---
+
 ## Running End to End (Beginner Guide)
 
 ### Prerequisites
